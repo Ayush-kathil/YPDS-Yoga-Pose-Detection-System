@@ -127,14 +127,15 @@ This project is open source and available under the [MIT License](LICENSE).
 
 ## 👨‍💻 Developer
 
-**Ayush Gupta**
-**Saksham Gupta**
-**Dhanashri Dhatrak**
-**Shikha Singh**
-**Bhakti Ramawat**
+**Ayush Gupta**,
+**Saksham Gupta**,
+**Dhanashri Dhatrak**,
+**Shikha Singh**,
+**Bhakti Ramawat**,
 **Bhavna Varma**
 
 ---
 
 _Practice yoga with precision. Namaste! 🙏_
+
 
