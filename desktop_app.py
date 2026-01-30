@@ -16,12 +16,12 @@ import time
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from urllib.request import urlopen
+import mediapipe as mp
 
 # Import mediapipe with robust fallback
 mp_pose = None
 mp_drawing = None
 try:
-    import mediapipe as mp
     if hasattr(mp, 'solutions') and hasattr(mp.solutions, 'pose'):
         mp_pose = mp.solutions.pose
         mp_drawing = mp.solutions.drawing_utils
@@ -35,28 +35,28 @@ except ImportError as e:
     print(f"Mediapipe import error: {e}")
 
 # --- Configuration ---
-ctk.set_appearance_mode("Dark")
-ctk.set_default_color_theme("dark-blue")
+ctk.set_appearance_mode("Light")
+ctk.set_default_color_theme("blue")
 
-# Modern Gradient Palette
+# "Google Antigravity" / Premium Classic Palette
 COLORS = {
-    "bg": "#0a0a0f",              # Deep Dark
-    "bg_gradient": "#12121a",     # Slightly lighter
-    "sidebar": "#141420",         # Dark Purple-tinted
-    "card": "#1e1e2e",            # Card Background
-    "card_hover": "#2a2a3e",      # Card Hover
-    "primary": "#6366f1",         # Indigo
-    "primary_light": "#818cf8",   # Light Indigo
-    "secondary": "#8b5cf6",       # Purple
-    "success": "#10b981",         # Emerald
-    "success_light": "#34d399",   # Light Emerald
-    "warning": "#f59e0b",         # Amber
-    "error": "#ef4444",           # Red
-    "text_primary": "#ffffff",
-    "text_secondary": "#a1a1aa",  # Zinc 400
-    "text_muted": "#71717a",      # Zinc 500
-    "accent": "#06b6d4",          # Cyan
-    "glow": "#8b5cf6"             # Purple glow
+    'bg': '#FFFFFF',
+    'sidebar': '#F8F9FA',
+    'active_bg': '#E8F0FE', # Light Blue highlight
+    'primary': '#1A73E8',   # Google Blue
+    'secondary': '#5F6368', # Dark Gray
+    'text_primary': '#202124',
+    'text_secondary': '#5F6368',
+    "text_muted": "#DADCE0",      # Light Gray
+    "accent": "#1A73E8",          # Blue
+    "glow": "#D2E3FC",            # Light Blue glow
+    "card": "#FFFFFF",            # White cards
+    "card_hover": "#F1F3F4",      # Light gray hover
+    "primary_light": "#D2E3FC",   # Light Blue
+    "success": "#34A853",         # Google Green
+    "success_light": "#CEEAD6",   # Light Green
+    "warning": "#FBBC05",         # Google Yellow
+    "error": "#EA4335",           # Google Red
 }
 
 class LandmarkSmoother:
@@ -277,6 +277,17 @@ class YPDSApp(ctk.CTk):
         self.pose_images = {}  # Cache for pose reference images
         self.current_score = 0
         self.best_score = 0
+        self.session_scores = []  # Track scores for average average
+        self.calories_burnt = 0.0
+        self.difficulty = "Normal" # Normal, Pro
+        
+        # Workout Mode State
+        self.timer_running = False
+        self.timer_start = 0
+        self.timer_duration = 30 # Default hold time
+        self.in_rest_mode = False
+        self.rest_duration = 10
+        self.rest_start = 0
         
         # Tools
         self.mp_pose = mp_pose
@@ -284,13 +295,13 @@ class YPDSApp(ctk.CTk):
             print("CRITICAL: Mediapipe Pose module not loaded.")
               
         self.pose_engine = self.mp_pose.Pose(
-            min_detection_confidence=0.8,  # Higher for better accuracy
-            min_tracking_confidence=0.8,
-            model_complexity=2,  # Highest accuracy model
+            min_detection_confidence=0.5,  # Lowered for better detection
+            min_tracking_confidence=0.5,
+            model_complexity=1,  # 1 is faster/lighter, 2 is more accurate but heavier
             smooth_landmarks=True
         )
         self.classifier = YogaPoseClassifier()
-        self.smoother = LandmarkSmoother(alpha=0.35)  # More smoothing
+        self.smoother = LandmarkSmoother(alpha=0.40)  # Smoother tracking
         
         # Load Data
         self.poses = self.load_poses()
@@ -299,12 +310,30 @@ class YPDSApp(ctk.CTk):
         else:
             self.classifier.train_with_smart_augmentation(self.poses)
 
-        # Setup UI directly (no splash screen)
+        # Load Configuration and Data
+        self.poses = self.load_poses()
+        
+        # Load Machine Learning Model
+        if os.path.exists("yoga_pose_model.pkl"):
+            self.classifier.load_model("yoga_pose_model.pkl")
+            print("✅ Model loaded successfully.")
+        else:
+            print("⚠️ Model not found, starting fresh training.")
+            self.classifier.train_with_smart_augmentation(self.poses)
+
+        # Start with Splash Screen
+        self.withdraw() # Hide main window
+        splash = SplashScreen(self, self.on_splash_complete)
+        
+    def on_splash_complete(self):
+        self.deiconify() # Show main window
         self.setup_ui()
         self.update_video_loop()
         self.start_background_image_loading()
 
     def load_poses(self):
+        """Loads yoga pose definitions from CSV file."""
+        # Path is now in the same directory as this script
         path = os.path.join(os.path.dirname(__file__), 'yoga_poses.csv')
         data = {}
         if os.path.exists(path):
@@ -315,7 +344,10 @@ class YPDSApp(ctk.CTk):
                         'url': row['image_url'],
                         'joints': json.loads(row['landmarks'])
                     }
-            except: pass
+            except Exception as e:
+                print(f"Error loading poses: {e}")
+        else:
+            print(f"CSV not found at: {path}")
         return data
 
     def start_background_image_loading(self):
@@ -338,91 +370,84 @@ class YPDSApp(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
         
         # --- Left Sidebar ---
-        self.sidebar = ctk.CTkFrame(self, width=320, fg_color=COLORS['sidebar'], corner_radius=0)
+        self.sidebar = ctk.CTkFrame(self, width=300, fg_color=COLORS['sidebar'], corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
         
-        # Header with glow effect
-        header_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        header_frame.pack(fill="x", pady=(30, 20), padx=25)
-        
-        self.logo_emoji = ctk.CTkLabel(header_frame, text="🧘", font=("Segoe UI Emoji", 40))
-        self.logo_emoji.pack(side="left")
-        
-        title_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
-        title_frame.pack(side="left", padx=15)
-        
-        self.header_label = ctk.CTkLabel(
-            title_frame, 
+        # Header - Minimalist
+        self.logo_label = ctk.CTkLabel(
+            self.sidebar, 
             text="YPDS", 
-            font=("Segoe UI", 28, "bold"), 
-            text_color=COLORS['primary']
+            font=("Arial", 36, "bold"), 
+            text_color=COLORS['text_primary']
         )
-        self.header_label.pack(anchor="w")
+        self.logo_label.pack(pady=(40, 5), padx=30, anchor="w")
         
-        self.subtitle_label = ctk.CTkLabel(
-            title_frame, 
-            text="Yoga Pose Detection", 
-            font=("Segoe UI", 12), 
+        ctk.CTkLabel(
+            self.sidebar, 
+            text="Yoga Pose Detection System", 
+            font=("Arial", 14), 
             text_color=COLORS['text_secondary']
-        )
-        self.subtitle_label.pack(anchor="w")
+        ).pack(padx=30, anchor="w", pady=(0, 20))
         
-        # Accuracy indicator
+        # Separator
+        ctk.CTkFrame(self.sidebar, height=1, fg_color="#E0E0E0").pack(fill="x", padx=30, pady=10)
+
+        # Pose List Header
+        ctk.CTkLabel(
+            self.sidebar, 
+            text="PRACTICE", 
+            font=("Arial", 12, "bold"), 
+            text_color=COLORS['text_secondary']
+        ).pack(padx=30, anchor="w", pady=(20, 10))
+        
+        # Scrollable Pose List - Clean
+        self.scroll_frame = ctk.CTkScrollableFrame(
+            self.sidebar, 
+            fg_color="transparent",
+            scrollbar_button_color="#DADCE0",
+            scrollbar_button_hover_color=COLORS['text_secondary']
+        )
+        self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        self.pose_buttons = {}
+        pose_icons = {"Downdog": "🐕", "Goddess": "👸", "Plank": "💪", "Tree": "🌳", "Warrior Ii": "⚔️"}
+        
+        for name in self.poses.keys():
+            icon = pose_icons.get(name, "•")
+            btn = ctk.CTkButton(
+                self.scroll_frame, 
+                text=f"  {name}",
+                font=("Arial", 16),
+                fg_color="transparent", 
+                text_color=COLORS['text_primary'],
+                hover_color=COLORS['card_hover'],
+                anchor="w",
+                height=50,
+                corner_radius=8,
+                command=lambda n=name: self.set_pose(n)
+            )
+            btn.pack(fill="x", pady=2)
+            self.pose_buttons[name] = btn
+
+        # Accuracy indicator (Dynamic)
         self.accuracy_frame = ctk.CTkFrame(self.sidebar, fg_color=COLORS['card'], corner_radius=12)
         self.accuracy_frame.pack(fill="x", padx=20, pady=(0, 20))
         
         ctk.CTkLabel(
             self.accuracy_frame, 
-            text="🎯 Detection Accuracy", 
+            text="🎯 Session Avg", 
             font=("Segoe UI", 12, "bold"),
             text_color=COLORS['text_secondary']
         ).pack(pady=(12, 5))
         
         self.accuracy_label = ctk.CTkLabel(
             self.accuracy_frame, 
-            text="95%", 
+            text="--%", 
             font=("Segoe UI", 32, "bold"),
-            text_color=COLORS['success']
+            text_color=COLORS['text_primary']
         )
-        self.accuracy_label.pack(pady=(0, 12))
-        
-        # Pose List Header
-        ctk.CTkLabel(
-            self.sidebar, 
-            text="SELECT POSE", 
-            font=("Segoe UI", 11, "bold"), 
-            text_color=COLORS['text_muted']
-        ).pack(padx=25, anchor="w", pady=(10, 5))
-        
-        # Scrollable Pose List
-        self.scroll_frame = ctk.CTkScrollableFrame(
-            self.sidebar, 
-            fg_color="transparent",
-            scrollbar_button_color=COLORS['card'],
-            scrollbar_button_hover_color=COLORS['primary']
-        )
-        self.scroll_frame.pack(fill="both", expand=True, padx=15, pady=5)
-        
-        self.pose_buttons = {}
-        pose_icons = {"Downdog": "🐕", "Goddess": "👸", "Plank": "💪", "Tree": "🌳", "Warrior Ii": "⚔️"}
-        
-        for name in self.poses.keys():
-            icon = pose_icons.get(name, "🧘")
-            btn = ctk.CTkButton(
-                self.scroll_frame, 
-                text=f"  {icon}  {name}",
-                font=("Segoe UI", 15),
-                fg_color=COLORS['card'], 
-                text_color=COLORS['text_primary'],
-                hover_color=COLORS['card_hover'],
-                anchor="w",
-                height=55,
-                corner_radius=12,
-                command=lambda n=name: self.set_pose(n)
-            )
-            btn.pack(fill="x", pady=4)
-            self.pose_buttons[name] = btn
+        self.accuracy_label.pack(pady=(0, 5))
 
         # Bottom Controls
         self.control_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
@@ -444,10 +469,14 @@ class YPDSApp(ctk.CTk):
         self.display = ctk.CTkFrame(self, fg_color=COLORS['bg'])
         self.display.grid(row=0, column=1, sticky="nsew", padx=15, pady=15)
         
-        # Video container with border glow effect
-        self.video_container = ctk.CTkFrame(self.display, fg_color=COLORS['card'], corner_radius=20)
-        self.video_container.pack(fill="both", expand=True)
+        # HUD Overlay pinned to bottom
+        self.hud_frame = ctk.CTkFrame(self.display, fg_color=COLORS['sidebar'], corner_radius=15, height=100)
+        self.hud_frame.pack(side="bottom", fill="x", pady=10,padx=10)
         
+        # Video container taking remaining space
+        self.video_container = ctk.CTkFrame(self.display, fg_color=COLORS['card'], corner_radius=20)
+        self.video_container.pack(side="top", fill="both", expand=True)
+
         self.video_label = ctk.CTkLabel(self.video_container, text="", corner_radius=18, fg_color=COLORS['bg'])
         self.video_label.pack(fill="both", expand=True, padx=3, pady=3)
         
@@ -474,10 +503,6 @@ class YPDSApp(ctk.CTk):
             font=("Segoe UI", 14),
             text_color=COLORS['text_secondary']
         ).pack(pady=(0, 30))
-        
-        # HUD Overlay at bottom
-        self.hud_frame = ctk.CTkFrame(self.display, fg_color=COLORS['sidebar'], corner_radius=15, height=100)
-        self.hud_frame.pack(fill="x", pady=(10, 0))
         
         hud_inner = ctk.CTkFrame(self.hud_frame, fg_color="transparent")
         hud_inner.pack(fill="x", padx=20, pady=15)
@@ -616,12 +641,6 @@ class YPDSApp(ctk.CTk):
         
         self.session_start_time = None
         
-    def set_pose(self, name):
-        self.current_pose = name
-        self.best_score = 0
-        self.best_score_label.configure(text="0%")
-        
-        # Animate button selection
         for n, btn in self.pose_buttons.items():
             if n == name:
                 btn.configure(fg_color=COLORS['primary'], text_color="#ffffff")
@@ -635,16 +654,56 @@ class YPDSApp(ctk.CTk):
         
         # Update reference image
         if name in self.pose_images:
-            self.ref_image_label.configure(image=self.pose_images[name], text="")
+            if hasattr(self, 'ref_image_label'):
+                self.ref_image_label.configure(image=self.pose_images[name], text="")
         else:
-            self.ref_image_label.configure(text="Loading image...", image=None)
+            if hasattr(self, 'ref_image_label'):
+                self.ref_image_label.configure(text="Loading...", image=None)
             self._check_image_loaded(name)
-    
+
+    def set_pose(self, name):
+        """Sets the current target pose and resets state"""
+        self.current_pose = name
+        self.best_score = 0
+        self.timer_running = False # Reset timer on new pose
+        self.in_rest_mode = False
+        
+        if hasattr(self, 'best_score_label'):
+            self.best_score_label.configure(text="0%")
+        if hasattr(self, 'instruction_lbl'):
+            self.instruction_lbl.configure(text=f"Target: {name}")
+            self.feedback_lbl.configure(text="Get into position...")
+        if hasattr(self, 'ref_pose_name'):
+             self.ref_pose_name.configure(text=name)
+             
+        # Animate button
+        for n, btn in self.pose_buttons.items():
+            if n == name:
+                btn.configure(fg_color=COLORS['active_bg'], text_color=COLORS['primary'])
+            else:
+                btn.configure(fg_color="transparent", text_color=COLORS['text_primary'])
+
+        # Update reference image
+        if name in self.pose_images:
+            if hasattr(self, 'ref_image_label'):
+                self.ref_image_label.configure(image=self.pose_images[name], text="")
+        else:
+            if hasattr(self, 'ref_image_label'):
+                self.ref_image_label.configure(text="Loading...", image=None)
+            self._check_image_loaded(name)
+            
     def _check_image_loaded(self, name):
         if name in self.pose_images:
-            self.ref_image_label.configure(image=self.pose_images[name], text="")
+            if hasattr(self, 'ref_image_label'):
+                 self.ref_image_label.configure(image=self.pose_images[name], text="")
         else:
             self.after(500, lambda: self._check_image_loaded(name))
+            
+    def change_difficulty(self, value):
+        self.difficulty = value
+        print(f"Difficulty changed to: {value}")
+        self.session_scores = []
+        self.accuracy_label.configure(text="--%")
     
     def _animate_button_glow(self, btn):
         colors = [COLORS['primary'], COLORS['primary_light'], COLORS['primary']]
@@ -672,6 +731,9 @@ class YPDSApp(ctk.CTk):
                 self.welcome_frame.place_forget()
                 threading.Thread(target=self.capture_loop, daemon=True).start()
                 self._update_session_time()
+            else:
+                print("❌ Failed to open camera.")
+                self.feedback_lbl.configure(text="Error: Cannot open camera")
     
     def _update_session_time(self):
         if self.camera_on and self.session_start_time:
@@ -709,9 +771,51 @@ class YPDSApp(ctk.CTk):
                 
                 if self.current_pose and self.current_pose in self.poses:
                     score, analysis = self.analyze_pose(landmarks)
-                    self.draw_skeleton(frame, landmarks, analysis['connections'])
                     feedback_msg = analysis['msg']
                     score_val = score
+                    
+                    # --- WORKOUT LOGIC ---
+                    if not self.in_rest_mode:
+                        self.draw_skeleton(frame, landmarks, analysis['connections'])
+                        
+                        if score_val > 75:
+                            if not self.timer_running:
+                                self.timer_start = time.time()
+                                self.timer_running = True
+                            
+                            elapsed = time.time() - self.timer_start
+                            remaining = max(0, self.timer_duration - elapsed)
+                            
+                            # Draw Hold Timer
+                            cv2.putText(frame, f"HOLD: {int(remaining)}s", (30, 80), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+                            
+                            if remaining <= 0:
+                                self.in_rest_mode = True
+                                self.rest_start = time.time()
+                                self.timer_running = False
+                                self.calories_burnt += 5.0 # Bonus burns
+                        else:
+                            self.timer_running = False # Reset if pose breaks
+                    else:
+                        # Rest Mode Overlay
+                        rest_elapsed = time.time() - self.rest_start
+                        rest_remaining = max(0, self.rest_duration - rest_elapsed)
+                        
+                        # Semi-transparent overlay
+                        overlay = frame.copy()
+                        cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+                        frame = cv2.addWeighted(overlay, 0.7, frame, 0.3, 0)
+                        
+                        cv2.putText(frame, "REST MODE", (w//2 - 180, h//2 - 60), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 4)
+                        cv2.putText(frame, f"{int(rest_remaining)}s", (w//2 - 60, h//2 + 60), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 255, 255), 5)
+                        
+                        feedback_msg = "Take a breathe..."
+                        
+                        if rest_remaining <= 0:
+                            self.in_rest_mode = False
                     
                     # Update best score
                     if score_val > self.best_score:
@@ -759,8 +863,27 @@ class YPDSApp(ctk.CTk):
             else:
                 self.score_label.configure(text_color=COLORS['error'])
                 self.score_bar.configure(progress_color=COLORS['error'])
+                
+            # Update Session Average & Calories
+            if score_val > 5:
+                self.session_scores.append(score_val)
+                if len(self.session_scores) > 300: self.session_scores.pop(0)
+                avg = sum(self.session_scores) / len(self.session_scores)
+                self.accuracy_label.configure(text=f"{int(avg)}%")
+                
+                # Simple Calorie Est: 3.5 METs * weight(avg 70kg) / 3600 per second 
+                # ~ 0.07 kcal/sec (~4 kcal/min for light yoga)
+                self.calories_burnt += 0.002 # Per frame (approx 25ms)
+                if int(self.calories_burnt * 10) % 10 == 0: # Update occasionally
+                     pass # visual update could go here if UI existed
 
         self.after(25, self.update_video_loop)  # ~40fps
+
+    def change_difficulty(self, value):
+        self.difficulty = value
+        print(f"Difficulty changed to: {value}")
+        self.session_scores = []
+        self.accuracy_label.configure(text="--%")
         
     def analyze_pose(self, landmarks):
         """Returns score (0-100) and feedback details - Tuned for 95% accuracy target"""
@@ -772,6 +895,11 @@ class YPDSApp(ctk.CTk):
         worst_angle = {'diff': -1, 'msg': 'Perfect Form! 🎯'}
         conn_status = {}
         
+        # Difficulty Modifiers
+        strictness = 1.0
+        if self.difficulty == "Pro":
+            strictness = 0.7 # Tolerances are 30% tighter
+        
         for j in target_joints:
             weight = j.get('weight', 1.0)
             ang = self.classifier.calculate_angle(
@@ -779,16 +907,19 @@ class YPDSApp(ctk.CTk):
             )
             diff = abs(ang - j['angle'])
             
-            # More forgiving scoring for 95% achievable accuracy
-            # <10 deg = 100%, <20 deg = 90%+, <30 deg = 70%+
-            if diff < 10:
+            # Adjusted Logic based on Difficulty
+            t_perfect = 10 * strictness
+            t_good = 20 * strictness
+            t_ok = 30 * strictness
+            
+            if diff < t_perfect:
                 score = 100
-            elif diff < 20:
-                score = 100 - (diff - 10) * 1  # 90-100
-            elif diff < 30:
-                score = 90 - (diff - 20) * 2   # 70-90
+            elif diff < t_good:
+                score = 100 - (diff - t_perfect) * (10 / (t_good - t_perfect))
+            elif diff < t_ok:
+                score = 90 - (diff - t_good) * (20 / (t_ok - t_good))
             else:
-                score = max(0, 70 - (diff - 30) * 2)  # 0-70
+                score = max(0, 70 - (diff - t_ok) * 2)
             
             total_score += score * weight
             total_w += weight
@@ -824,28 +955,22 @@ class YPDSApp(ctk.CTk):
         # Neon colors (BGR)
         c_good = (88, 255, 127)   # Neon Green
         c_bad = (68, 68, 239)     # Neon Red
-        c_neutral = (180, 180, 180)
+        c_neutral = (200, 200, 200) # Lighter Gray
         
-        # Draw glow effect for good connections
+        # Draw all connections
         for p1, p2 in connections:
-            if (p1, p2) in statuses or (p2, p1) in statuses:
-                status = statuses.get((p1, p2)) or statuses.get((p2, p1))
-                if status == 'good':
-                    pt1 = (int(landmarks[p1].x * w), int(landmarks[p1].y * h))
-                    pt2 = (int(landmarks[p2].x * w), int(landmarks[p2].y * h))
-                    # Glow layer
-                    cv2.line(frame, pt1, pt2, c_good, 8, cv2.LINE_AA)
-        
-        for p1, p2 in connections:
-            if (p1, p2) in statuses:
-                color = c_good if statuses[(p1, p2)] == 'good' else c_bad
+            color = c_neutral
+            thick = 2
+            
+            # Check status
+            status = statuses.get((p1, p2)) or statuses.get((p2, p1))
+            
+            if status == 'good':
+                color = c_good
                 thick = 4
-            elif (p2, p1) in statuses:
-                color = c_good if statuses[(p2, p1)] == 'good' else c_bad
+            elif status == 'bad':
+                color = c_bad
                 thick = 4
-            else:
-                color = c_neutral
-                thick = 2
                 
             pt1 = (int(landmarks[p1].x * w), int(landmarks[p1].y * h))
             pt2 = (int(landmarks[p2].x * w), int(landmarks[p2].y * h))
@@ -855,8 +980,8 @@ class YPDSApp(ctk.CTk):
         # Draw joints
         for lm in landmarks:
             cx, cy = int(lm.x * w), int(lm.y * h)
-            cv2.circle(frame, (cx, cy), 7, (255, 255, 255), -1)
-            cv2.circle(frame, (cx, cy), 9, (0, 0, 0), 2)
+            cv2.circle(frame, (cx, cy), 6, (255, 255, 255), -1)
+            cv2.circle(frame, (cx, cy), 8, (0, 0, 0), 1)
 
 if __name__ == "__main__":
     app = YPDSApp()
